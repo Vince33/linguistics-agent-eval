@@ -10,6 +10,10 @@ from src.tools import (
     find_languages_by_feature,
     compare_languages,
 )
+from src.glottolog_tools import (
+    get_endangerment_status,
+    find_endangered_languages_by_feature,
+)
 
 client = anthropic.Anthropic()
 
@@ -133,7 +137,66 @@ TOOLS = [
             },
             "required": ["language_names", "feature_name"]
         }
-    }
+    },
+    {
+        "name": "get_endangerment_status",
+        "description": (
+            "Get the endangerment status of a language from Glottolog. "
+            "Requires a Glottocode identifier, which can be obtained from "
+            "lookup_language. Returns the AES (Agglomerated Endangerment Status) "
+            "which ranges from 'not endangered' to 'extinct', with source citations. "
+            "Use this when asked about whether a language is endangered, threatened, "
+            "or extinct."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "glottocode": {
+                    "type": "string",
+                    "description": "The Glottocode identifier (e.g. 'nucl1643' for Japanese)"
+                }
+            },
+            "required": ["glottocode"]
+        }
+    },
+    {
+        "name": "find_endangered_languages_by_feature",
+        "description": (
+            "Cross-source query: find languages that have a specific WALS "
+            "typological feature value AND are endangered according to Glottolog. "
+            "This joins WALS and Glottolog data via the shared glottocode identifier. "
+            "Use this for questions like 'which endangered languages have SOV word order' "
+            "or 'which extinct languages lacked tone'. "
+            "This is the most powerful tool for questions combining typology and endangerment."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "feature_name": {
+                    "type": "string",
+                    "description": "WALS feature name or ID (e.g. 'word order' or '81A')"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The WALS feature value (e.g. 'SOV', 'SVO')"
+                },
+                "endangerment_levels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of endangerment levels to include. Options: 'threatened', 'shifting', 'moribund', 'nearly extinct', 'extinct'. Defaults to all endangered levels."
+                },
+                "family": {
+                    "type": "string",
+                    "description": "Optional language family filter"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default 20)"
+                }
+            },
+            "required": ["feature_name", "value"]
+        }
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -142,6 +205,8 @@ TOOL_FUNCTIONS = {
     "get_language_feature": get_language_feature,
     "find_languages_by_feature": find_languages_by_feature,
     "compare_languages": compare_languages,
+    "get_endangerment_status": get_endangerment_status,
+    "find_endangered_languages_by_feature": find_endangered_languages_by_feature,
 }
 
 SYSTEM_PROMPT = """You are a linguistics research assistant with access to the 
