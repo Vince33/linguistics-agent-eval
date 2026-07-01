@@ -209,19 +209,20 @@ TOOL_FUNCTIONS = {
     "find_endangered_languages_by_feature": find_endangered_languages_by_feature,
 }
 
-SYSTEM_PROMPT = """You are a linguistics research assistant with access to the 
-World Atlas of Language Structures (WALS) database. You help researchers and 
-language enthusiasts answer questions about the typological features of the 
-world's languages.
+SYSTEM_PROMPT = """You are a linguistics research assistant with access to two
+linguistic databases: the World Atlas of Language Structures (WALS) for typological
+features, and Glottolog for language classification and endangerment status.
 
 When answering questions:
 - Always use your tools to retrieve data rather than relying on your own knowledge
-- Cite the source of your data (WALS feature ID and source citations when available)
+- Cite the source of your data (WALS feature ID and Glottolog source citations when available)
 - Be precise about what the data shows and what it does not show
 - If data is missing for a language or feature, say so clearly
 - Show your reasoning — explain what you looked up and why
+- For questions combining typology and endangerment, use find_endangered_languages_by_feature
 
-You have access to data on 2,679 languages across 192 typological features."""
+You have access to data on 2,679 languages across 192 typological features (WALS)
+and endangerment status for thousands of languages (Glottolog 5.1)."""
 
 
 def run_agent(question: str, verbose: bool = False) -> dict:
@@ -239,7 +240,11 @@ def run_agent(question: str, verbose: bool = False) -> dict:
     tool_calls_made = []
     tool_results = []
 
-    while True:
+    MAX_TURNS = 10
+    turn = 0
+
+    while turn < MAX_TURNS:
+        turn += 1
         response = client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=1024,
@@ -307,7 +312,7 @@ def run_agent(question: str, verbose: bool = False) -> dict:
                 tool_results_for_turn.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": json.dumps(result)
+                    "content": json.dumps(result, default=str)
                 })
 
             # Add tool results to message history
@@ -315,3 +320,11 @@ def run_agent(question: str, verbose: bool = False) -> dict:
                 "role": "user",
                 "content": tool_results_for_turn
             })
+
+    # Safety fallback if MAX_TURNS exceeded
+    return {
+        "question": question,
+        "answer": "Agent exceeded maximum turns without completing.",
+        "tool_calls": tool_calls_made,
+        "tool_results": tool_results,
+    }
