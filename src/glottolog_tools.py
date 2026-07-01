@@ -10,15 +10,6 @@ GLOTTOLOG_PATH = os.path.join(
     "data", "glottolog-cldf-5.1", "cldf", "cldf-metadata.json"
 )
 
-AES_LABELS = {
-    "aes-not_endangered": "not endangered",
-    "aes-threatened": "threatened",
-    "aes-shifting": "shifting",
-    "aes-moribund": "moribund",
-    "aes-nearly_extinct": "nearly extinct",
-    "aes-extinct": "extinct",
-}
-
 AES_NUMERICAL = {
     "1": "not endangered",
     "2": "threatened",
@@ -73,8 +64,6 @@ def get_endangerment_status(glottocode: str) -> dict:
         }
 
     status = AES_NUMERICAL.get(aes_record["Value"], "unknown")
-    code_id = aes_record.get("Code_ID", "")
-    description = ""
 
     # Get classification
     classification_record = lang_values.get("classification")
@@ -123,6 +112,8 @@ def find_endangered_languages_by_feature(
         dict with matching languages, their WALS feature value,
         and their Glottolog endangerment status
     """
+    # Deferred import to avoid circular dependency between tools.py
+    # and glottolog_tools.py at module load time
     from src.tools import find_languages_by_feature
 
     # Default to all endangered levels
@@ -136,7 +127,9 @@ def find_endangered_languages_by_feature(
         feature_name=feature_name,
         value=value,
         family=family,
-        limit=500  # Get a large set to filter from
+        limit=500  # Fetch a large set to filter against Glottolog data.
+                   # Acceptable at WALS scale (2,679 languages) but would
+                   # need a database query for a larger dataset.
     )
 
     if "error" in wals_result:
