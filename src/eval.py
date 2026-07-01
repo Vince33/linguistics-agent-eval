@@ -2,14 +2,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
-from deepeval import evaluate
 from deepeval.metrics import FaithfulnessMetric
 from deepeval.test_case import LLMTestCase
 from deepeval.models.base_model import DeepEvalBaseLLM
 import anthropic
 
 from src.agent import run_agent
-from src.tools import get_language_feature, find_languages_by_feature
+from src.tools import get_language_feature
 from src.glottolog_tools import get_endangerment_status
 
 
@@ -25,12 +24,15 @@ class ClaudeHaiku(DeepEvalBaseLLM):
         return self.client
 
     def generate(self, prompt: str) -> str:
-        response = self.client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text
+        try:
+            response = self.client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+        except Exception as e:
+            return f"Error generating response: {str(e)}"
 
     async def a_generate(self, prompt: str) -> str:
         return self.generate(prompt)
@@ -137,10 +139,13 @@ def eval_tool_selection(result: dict, expected_tools: list) -> dict:
 # ─────────────────────────────────────────────
 
 def eval_factual_accuracy(result: dict, expected_facts: dict, ground_truth: dict) -> dict:
-    """
-    Check the agent's answer against ground truth from WALS/Glottolog.
-    Deterministic — checks whether key facts from tool results
-    appear in the agent's final answer.
+    """Check the agent's answer against ground truth from WALS/Glottolog.
+    Deterministic — checks whether key facts appear in the agent's final answer.
+
+    Note: This uses substring matching, which is fast and deterministic but
+    can produce false positives (e.g. "not SOV" would pass a check for "SOV").
+    For stronger factual checking, consider an LLM judge comparing the answer
+    against ground_truth directly.
     """
     answer = result["answer"].lower()
     failures = []
@@ -213,6 +218,47 @@ def eval_faithfulness(result: dict) -> dict:
         "reason": metric.reason,
     }
 
+# ─────────────────────────────────────────────
+# Dimension 4: Data consistency
+# ─────────────────────────────────────────────
+
+def eval_data_consistency(tool_results: list) -> dict:
+    """
+    Check whether tool results contain internal contradictions
+    that could reasonably cause faithfulness failures.
+
+    This dimension separates 'agent hallucinated' from 'source data
+    was ambiguous' — a meaningful distinction for production AI QA.
+
+    Currently detects: Glottolog AES numerical classification
+    contradicting its own qualitative comment field.
+    """
+    issues = []
+    for tr in tool_results:
+        result = tr["result"]
+        if "endangerment_status" in result and "comment" in result:
+            status = result["endangerment_status"]
+            comment = result.get("comment", "") or ""
+            endangered_keywords = [
+                "at risk", "threatened", "endangered",
+                "vulnerable", "critically"
+            ]
+            comment_suggests_endangered = any(
+                kw in comment.lower() for kw in endangered_keywords
+            )
+            if status == "not endangered" and comment_suggests_endangered:
+                issues.append({
+                    "tool": tr["tool"],
+                    "issue": "AES classification contradicts comment text",
+                    "classification": status,
+                    "comment_excerpt": comment[:120]
+                })
+
+    return {
+        "consistent": len(issues) == 0,
+        "issues": issues
+    }
+
 
 # ─────────────────────────────────────────────
 # Full eval runner
@@ -248,6 +294,9 @@ def run_eval(verbose: bool = False) -> list:
         print("  Evaluating faithfulness...")
         faithfulness_eval = eval_faithfulness(agent_result)
 
+        # Dimension 4: Data consistency
+        consistency_eval = eval_data_consistency(agent_result["tool_results"])
+
         result = {
             "question": case["question"],
             "answer": agent_result["answer"],
@@ -255,6 +304,7 @@ def run_eval(verbose: bool = False) -> list:
             "tool_selection": tool_eval,
             "factual_accuracy": factual_eval,
             "faithfulness": faithfulness_eval,
+            "data_consistency": consistency_eval,
         }
 
         results.append(result)
@@ -263,8 +313,14 @@ def run_eval(verbose: bool = False) -> list:
         ts = "✓" if tool_eval["passed"] else "✗"
         fa = "✓" if factual_eval["passed"] else "✗"
         fh = "✓" if faithfulness_eval.get("passed") else "✗"
+        dc = "✓" if consistency_eval["consistent"] else "⚠"
         score = faithfulness_eval.get("score", "N/A")
-        print(f"  Tool selection: {ts} | Factual accuracy: {fa} | Faithfulness: {fh} ({score})")
+        print(f"  Tool selection: {ts} | Factual accuracy: {fa} | Faithfulness: {fh} ({score}) | Data consistency: {dc}")
+
+        if not faithfulness_eval.get("passed") and not consistency_eval["consistent"]:
+            print(f"  ⚠ Faithfulness failure may reflect inconsistent source data:")
+            for issue in consistency_eval["issues"]:
+                print(f"    {issue['issue']}: {issue['comment_excerpt']}")
 
     return results
 
@@ -278,16 +334,20 @@ def print_scorecard(results: list):
         1 for r in results
         if r["faithfulness"].get("passed") is True
     )
+    consistent_passed = sum(
+        1 for r in results
+        if r["data_consistency"]["consistent"]
+    )
 
     print("\n" + "="*60)
     print("EVAL SCORECARD")
     print("="*60)
-    print(f"Tool selection accuracy:  {tool_passed}/{total} ({100*tool_passed//total}%)")
-    print(f"Factual accuracy:         {factual_passed}/{total} ({100*factual_passed//total}%)")
-    print(f"Faithfulness:             {faithful_passed}/{total} ({100*faithful_passed//total}%)")
+    print(f"Tool selection accuracy:  {tool_passed}/{total} ({round(100*tool_passed/total)}%)")
+    print(f"Factual accuracy:         {factual_passed}/{total} ({round(100*factual_passed/total)}%)")
+    print(f"Faithfulness:             {faithful_passed}/{total} ({round(100*faithful_passed/total)}%)")
+    print(f"Data consistency:         {consistent_passed}/{total} ({round(100*consistent_passed/total)}%)")
     print("="*60)
 
-    # Print failures
     failures = [r for r in results if not all([
         r["tool_selection"]["passed"],
         r["factual_accuracy"]["passed"],
@@ -303,9 +363,16 @@ def print_scorecard(results: list):
             if not r["factual_accuracy"]["passed"]:
                 print(f"  ✗ Factual accuracy: {r['factual_accuracy']['failures']}")
             if not r["faithfulness"].get("passed", False):
-                print(f"  ✗ Faithfulness ({r['faithfulness'].get('score', 'N/A')}): "
-                      f"{r['faithfulness'].get('reason', '')[:100]}")
-
+                score = r["faithfulness"].get("score", "N/A")
+                reason = r["faithfulness"].get("reason", "")[:100]
+                print(f"  ✗ Faithfulness ({score}): {reason}")
+                if not r["data_consistency"]["consistent"]:
+                    print(f"  ⚠ Source data inconsistency detected:")
+                    for issue in r["data_consistency"]["issues"]:
+                        print(f"    → {issue['issue']}")
+                        print(f"      AES classification: {issue['classification']}")
+                        print(f"      Comment: {issue['comment_excerpt']}")
+                    print(f"  → Faithfulness failure likely caused by inconsistent source data, not agent error")
 
 if __name__ == "__main__":
     results = run_eval(verbose=False)
