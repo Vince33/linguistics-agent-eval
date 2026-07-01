@@ -123,7 +123,9 @@ def get_feature_info(feature_name: str) -> dict:
                 0 if name_lower in p["Name"].lower() else 1,
                 len(p["ID"])
             ))
-
+            # Return ambiguous if more than 3 matches — at that point
+            # the query is too broad for the agent to resolve automatically.
+            # This threshold is a practical heuristic, not a principled cutoff.
             if len(matches) > 3:
                 return {
                     "ambiguous": True,
@@ -247,8 +249,11 @@ def find_languages_by_feature(
                      f"'{feature_result['name']}'. "
                      f"Possible values: {', '.join(possible)}"
         }
-
-    # Find all languages with this value
+    
+    # Find all languages with this value.
+    # This fetches all values into memory and filters in Python — acceptable
+    # at WALS scale (2,679 languages, 192 features) but would need a database
+    # query for a larger dataset.
     lang_matches = []
     for lang_id, lang_values in values.items():
         if feature_id not in lang_values:

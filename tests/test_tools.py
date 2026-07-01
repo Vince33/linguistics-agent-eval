@@ -52,6 +52,21 @@ class TestGetFeatureInfo:
         result = get_feature_info("nonexistent feature xyz")
         assert "error" in result
 
+    def test_partial_name_match_returns_result(self):
+        # Tests the partial name/area match fallback path (lines 122-133)
+        # "consonant" partially matches several feature names
+        result = get_feature_info("consonant inventories")
+        assert result["id"] == "1A"
+        assert "error" not in result
+
+    def test_ambiguous_partial_match_returns_ambiguous(self):
+        # Tests the > 3 ambiguous return path (lines 127-132)
+        # "order" matches many features by name
+        result = get_feature_info("order of")
+        assert "ambiguous" in result
+        assert len(result["matches"]) > 3
+    
+
 
 class TestGetLanguageFeature:
     def test_japanese_word_order(self):
@@ -74,6 +89,11 @@ class TestGetLanguageFeature:
         # Either returns a value or a clean error — never crashes
         assert "value" in result or "error" in result
 
+    def test_invalid_feature_propagates_error(self):
+        # Tests error propagation from get_feature_info (line 174)
+        result = get_language_feature("Japanese", "nonexistent_xyz_feature")
+        assert "error" in result
+
 
 class TestFindLanguagesByFeature:
     def test_finds_sov_languages(self):
@@ -94,6 +114,11 @@ class TestFindLanguagesByFeature:
         result = find_languages_by_feature("81A", "SOV", limit=3)
         assert result["provenance"] == "WALS"
 
+    def test_invalid_feature_propagates_error(self):
+        # Tests error propagation from get_feature_info (line 228)
+        result = find_languages_by_feature("nonexistent_xyz_feature", "SOV")
+        assert "error" in result
+
 
 class TestCompareLanguages:
     def test_japanese_korean_both_sov(self):
@@ -110,3 +135,8 @@ class TestCompareLanguages:
         result = compare_languages(["Japanese", "Klingon"], "word order")
         errors = [r for r in result["comparison"] if r.get("error")]
         assert len(errors) == 1
+
+    def test_invalid_feature_propagates_error(self):
+        # Tests error propagation from get_feature_info (line 305)
+        result = compare_languages(["Japanese", "Korean"], "nonexistent_xyz_feature")
+        assert "error" in result
